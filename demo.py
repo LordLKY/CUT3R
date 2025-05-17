@@ -420,3 +420,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# How to run the demo:
+# python demo.py --size 512 --seq_path examples/001 --vis_threshold 1.5 --output_dir output/demo_001
