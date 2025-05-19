@@ -75,6 +75,12 @@ def parse_args():
         default="./demo_tmp",
         help="value for tempfile.tempdir",
     )
+    parser.add_argument(
+        "--save_ply",
+        type=int,
+        default=0,
+        help="Whether to save the ply file or not",
+    )
 
     return parser.parse_args()
 
@@ -186,7 +192,7 @@ def prepare_input(
     return views
 
 
-def prepare_output(outputs, outdir, revisit=1, use_pose=True):
+def prepare_output(outputs, outdir, revisit=1, use_pose=True, save_ply=False):
     """
     Process inference outputs to generate point clouds and camera parameters for visualization.
 
@@ -285,6 +291,30 @@ def prepare_output(outputs, outdir, revisit=1, use_pose=True):
             pose=c2w,
             intrinsics=intrins,
         )
+    
+    if save_ply:
+        from plyfile import PlyData, PlyElement
+        ply_path = os.path.join(outdir, "points3D.ply")
+
+        def storePly(path, xyz, rgb):
+            # Define the dtype for the structured array
+            dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
+                    ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),
+                    ('red', 'u1'), ('green', 'u1'), ('blue', 'u1')]
+            
+            normals = np.zeros_like(xyz)
+
+            elements = np.empty(xyz.shape[0], dtype=dtype)
+            attributes = np.concatenate((xyz, normals, rgb), axis=1)
+            elements[:] = list(map(tuple, attributes))
+
+            # Create the PlyData object and write to file
+            vertex_element = PlyElement.describe(elements, 'vertex')
+            ply_data = PlyData([vertex_element])
+            ply_data.write(path)
+        
+        colors_tosave_u1 = torch.clamp(colors_tosave * 255, 0, 255).to(torch.uint8)
+        storePly(ply_path, pts3ds_other_tosave.reshape(-1, 3).cpu().numpy(), colors_tosave_u1.reshape(-1, 3).cpu().numpy())
 
     return pts3ds_other, colors, conf_other, cam_dict
 
@@ -381,7 +411,7 @@ def run_inference(args):
     # Process outputs for visualization.
     print("Preparing output for visualization...")
     pts3ds_other, colors, conf, cam_dict = prepare_output(
-        outputs, args.output_dir, 1, True
+        outputs, args.output_dir, 1, True, (args.save_ply != 0)
     )
 
     # Convert tensors to numpy arrays for visualization.
@@ -422,4 +452,8 @@ if __name__ == "__main__":
     main()
 
 # How to run the demo:
-# python demo.py --size 512 --seq_path examples/001 --vis_threshold 1.5 --output_dir output/demo_001
+# python demo.py --size 512 --seq_path examples/003 --vis_threshold 1.5 --output_dir output/demo_003 --save_ply 1
+    
+# use gs
+# python gs/train.py --eval --iterations 200 -s D:/MLsys/3D-on-Edge/code/CUT3R/output/demo_003
+# python gs/render.py -m D:/MLsys/3D-on-Edge/code/CUT3R/output/demo_003/model --iteration 200

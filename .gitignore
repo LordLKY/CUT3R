@@ -56,3 +56,9 @@ src/checkpoints
 
 # Ignore output
 output/
+
+# Ignore test
+test/
+
+# Ignore local_examples
+local_examples/

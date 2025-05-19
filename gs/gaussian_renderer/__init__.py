@@ -11,7 +11,7 @@
 
 import torch
 import math
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gaussian_rasterization_cut3r import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
@@ -28,10 +28,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         screenspace_points.retain_grad()
     except:
         pass
-
-    record_set = ['00002.jpg', '00054.jpg', '00098.jpg', '00130.jpg']
-    if viewpoint_camera.image_name in record_set:
-        print(f"num_points: {pc.get_xyz.shape[0]}")
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)

@@ -45,6 +45,8 @@ class Scene:
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.depths, args.eval)
+        elif os.path.exists(os.path.join(args.source_path, "camera")):
+            scene_info = sceneLoadTypeCallbacks["CUT3R"](args.source_path)
         else:
             assert False, "Could not recognize scene type!"
 
@@ -62,9 +64,9 @@ class Scene:
             with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:
                 json.dump(json_cams, file)
 
-        # if shuffle:
-        #     random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
-        #     random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
+        if shuffle:
+            random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
+            random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
 
         self.cameras_extent = scene_info.nerf_normalization["radius"]
 

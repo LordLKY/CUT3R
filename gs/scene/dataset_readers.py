@@ -37,6 +37,8 @@ class CameraInfo(NamedTuple):
     height: int
     is_test: bool
 
+    scale: float = 1.0
+
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
     train_cameras: list
@@ -309,7 +311,87 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"
                            is_nerf_synthetic=True)
     return scene_info
 
+
+# dataset_reader for CUT3R
+def readCUT3RCameras(cam_extrinsics, cam_intrinsics, images_folder):
+    cam_infos = []
+    for idx, key in enumerate(cam_extrinsics):
+        sys.stdout.write('\r')
+        # the exact output you're looking for:
+        sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
+        sys.stdout.flush()
+
+        uid = idx
+
+        extr = cam_extrinsics[key]
+        intr = cam_intrinsics[key]
+
+        # get R, T from extr
+        R = extr[:3, :3]
+        T = extr[:3, 3]
+
+        # get Fov, W, H from intr
+        focal = intr[0, 0]
+        width = intr[0, 2] * 2
+        height = intr[1, 2] * 2
+        FovY = focal2fov(focal, height)
+        FovX = focal2fov(focal, width)
+
+        image_name = key + '.png'
+        image_path = os.path.join(images_folder, image_name)
+        depth_params = None
+        depth_path = ""
+
+        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=depth_params,
+                              image_path=image_path, image_name=image_name, depth_path=depth_path,
+                              width=width, height=height, is_test=True, scale=1.0)
+        cam_infos.append(cam_info)
+    
+    sys.stdout.write('\n')
+    return cam_infos
+
+
+def readCUT3RSceneInfo(path):
+    # 1. read pose
+    cameras_path = os.path.join(path, "camera")
+    camera_files = sorted([
+        f for f in os.listdir(cameras_path)
+        if f.endswith(".npz")
+    ])
+    cam_extrinsics = {}
+    cam_intrinsics = {}
+
+    for fname in camera_files:
+        fpath = os.path.join(cameras_path, fname)
+        data = np.load(fpath)
+        cam_extrinsics[fname[:-4]] = data['pose']  # shape: (4, 4)
+        cam_intrinsics[fname[:-4]] = data['intrinsics']  # shape: (3, 3)
+    
+    images_path = os.path.join(path, "color")
+
+    cam_infos_unsorted = readCUT3RCameras(cam_extrinsics, cam_intrinsics, images_path)
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+    train_cam_infos = [c for c in cam_infos]
+    test_cam_infos = [c for c in cam_infos]
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    # 2. read ply
+    ply_path = os.path.join(path, "points3D.ply")
+    pcd = fetchPly(ply_path)
+
+    # 3. build scene_info
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path,
+                           is_nerf_synthetic=False)
+    return scene_info
+
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "CUT3R": readCUT3RSceneInfo,
 }

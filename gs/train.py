@@ -71,8 +71,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
 
-    record_set = ['00002.jpg', '00054.jpg', '00098.jpg', '00130.jpg']
-
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
@@ -101,13 +99,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             viewpoint_indices = list(range(len(viewpoint_stack)))
-        # rand_idx = randint(0, len(viewpoint_indices) - 1)
-        # viewpoint_cam = viewpoint_stack.pop(rand_idx)
-        # vind = viewpoint_indices.pop(rand_idx)
-        viewpoint_cam = viewpoint_stack[1]
-
-        if viewpoint_cam.image_name in record_set:
-            print(f"Iteration: {iteration}, tarining with cam_id {viewpoint_cam.colmap_id}/ img_name {viewpoint_cam.image_name}")
+        rand_idx = randint(0, len(viewpoint_indices) - 1)
+        viewpoint_cam = viewpoint_stack.pop(rand_idx)
+        vind = viewpoint_indices.pop(rand_idx)
 
         # Render
         if (iteration - 1) == debug_from:
@@ -131,9 +125,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ssim_value = ssim(image, gt_image)
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
-
-        if viewpoint_cam.image_name in record_set:
-            print(f"PSNR: {psnr(image, gt_image).mean()} / Ll1: {Ll1.mean()} / SSIM: {ssim_value.mean()}")
 
         # Depth regularization
         Ll1depth_pure = 0.0
@@ -175,10 +166,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-
-                print(radii[visibility_filter])
-                print(gaussians.max_radii2D[visibility_filter])
-                print(viewspace_point_tensor.grad)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
@@ -283,6 +270,10 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
+
+    if args.model_path == "":
+        os.makedirs(os.path.join(args.source_path, "model"), exist_ok=True)
+        args.model_path = os.path.join(args.source_path, "model")
     
     print("Optimizing " + args.model_path)
 
