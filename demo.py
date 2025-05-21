@@ -455,5 +455,6 @@ if __name__ == "__main__":
 # python demo.py --size 512 --seq_path examples/003 --vis_threshold 1.5 --output_dir output/demo_003 --save_ply 1
     
 # use gs
-# python gs/train.py --eval --iterations 200 -s D:/MLsys/3D-on-Edge/code/CUT3R/output/demo_003
-# python gs/render.py -m D:/MLsys/3D-on-Edge/code/CUT3R/output/demo_003/model --iteration 200
+# python gs/train.py --eval --iterations 200 -s output/demo_003
+# python gs/render.py -m output/demo_003/model --iteration 200
+# python gs/metrics.py -m output/demo_003/model
