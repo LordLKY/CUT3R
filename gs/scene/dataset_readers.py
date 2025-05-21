@@ -313,6 +313,21 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"
 
 
 # dataset_reader for CUT3R
+def rotmat2qvec(R):
+    # from https://github.com/CUT3R/CUT3R/issues/24
+    Rxx, Ryx, Rzx, Rxy, Ryy, Rzy, Rxz, Ryz, Rzz = R.flat
+    K = np.array([
+        [Rxx - Ryy - Rzz, 0, 0, 0],
+        [Ryx + Rxy, Ryy - Rxx - Rzz, 0, 0],
+        [Rzx + Rxz, Rzy + Ryz, Rzz - Rxx - Ryy, 0],
+        [Ryz - Rzy, Rzx - Rxz, Rxy - Ryx, Rxx + Ryy + Rzz]
+    ]) / 3.0
+    eigvals, eigvecs = np.linalg.eigh(K)
+    qvec = eigvecs[[3, 0, 1, 2], np.argmax(eigvals)]
+    if qvec[0] < 0:
+        qvec *= -1
+    return qvec
+
 def readCUT3RCameras(cam_extrinsics, cam_intrinsics, images_folder):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
@@ -327,8 +342,17 @@ def readCUT3RCameras(cam_extrinsics, cam_intrinsics, images_folder):
         intr = cam_intrinsics[key]
 
         # get R, T from extr
-        R = extr[:3, :3]
-        T = extr[:3, 3]
+        # from https://github.com/CUT3R/CUT3R/issues/24
+        R_c2w = extr[:3, :3]
+        T_c2w = extr[:3, 3]
+        c2w = np.eye(4)
+        c2w[:3, :3] = R_c2w
+        c2w[:3, 3] = T_c2w
+        w2c = np.linalg.inv(c2w)
+        R_w2c = w2c[:3, :3]
+        T = w2c[:3, 3]
+        qvec = rotmat2qvec(R_w2c)
+        R = np.transpose(qvec2rotmat(qvec))
 
         # get Fov, W, H from intr
         focal = intr[0, 0]

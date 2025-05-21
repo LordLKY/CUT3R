@@ -667,6 +667,20 @@ class ARCroco3DStereo(CroCoNet):
             pos_img = torch.cat([pos_pose, pos_img], dim=1)
         final_output.append((f_state, f_img))
         for blk_state, blk_img in zip(self.dec_blocks_state, self.dec_blocks):
+
+            '''
+            what is blk?
+
+            def forward(self, x, y, xpos, ypos):
+                x = x + self.drop_path(self.attn(self.norm1(x), xpos))
+                y_ = self.norm_y(y)
+                x = x + self.drop_path(self.cross_attn(self.norm2(x), y_, y_, xpos, ypos))
+                x = x + self.drop_path(self.mlp(self.norm3(x)))
+                return x, y
+            
+            x is Q, y is KV in cross attention
+            '''
+
             if (
                 self.gradient_checkpointing
                 and self.training
@@ -674,14 +688,14 @@ class ARCroco3DStereo(CroCoNet):
             ):
                 f_state, _ = checkpoint(
                     blk_state,
-                    *final_output[-1][::+1],
+                    *final_output[-1][::+1],  # f_state, f_img
                     pos_state,
                     pos_img,
                     use_reentrant=not self.fixed_input_length,
                 )
                 f_img, _ = checkpoint(
                     blk_img,
-                    *final_output[-1][::-1],
+                    *final_output[-1][::-1],  # f_img, f_state
                     pos_img,
                     pos_state,
                     use_reentrant=not self.fixed_input_length,
