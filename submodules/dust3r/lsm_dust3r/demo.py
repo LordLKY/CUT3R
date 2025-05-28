@@ -17,12 +17,12 @@ import trimesh
 import copy
 from scipy.spatial.transform import Rotation
 
-from dust3r.inference import inference
-from dust3r.image_pairs import make_pairs
-from dust3r.utils.image import load_images, rgb
-from dust3r.utils.device import to_numpy
-from dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL, pts3d_to_trimesh, cat_meshes
-from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
+from lsm_dust3r.inference import inference
+from lsm_dust3r.image_pairs import make_pairs
+from lsm_dust3r.utils.image import load_images, rgb
+from lsm_dust3r.utils.device import to_numpy
+from lsm_dust3r.viz import add_scene_cam, CAM_COLORS, OPENGL, pts3d_to_trimesh, cat_meshes
+from lsm_dust3r.cloud_opt import global_aligner, GlobalAlignerMode
 
 import matplotlib.pyplot as pl
 

@@ -9,7 +9,7 @@ import os
 import torch
 import tempfile
 
-from dust3r.model import AsymmetricCroCo3DStereo
+from lsm_dust3r.model import AsymmetricCroCo3DStereo
 from dust3r.demo import get_args_parser, main_demo, set_print_with_timestamp
 
 import matplotlib.pyplot as pl

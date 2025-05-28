@@ -13,15 +13,15 @@ import roma
 from copy import deepcopy
 import tqdm
 
-from dust3r.utils.geometry import inv, geotrf
-from dust3r.utils.device import to_numpy
-from dust3r.utils.image import rgb
-from dust3r.viz import SceneViz, segment_sky, auto_cam_size
-from dust3r.optim_factory import adjust_learning_rate_by_lr
+from lsm_dust3r.utils.geometry import inv, geotrf
+from lsm_dust3r.utils.device import to_numpy
+from lsm_dust3r.utils.image import rgb
+from lsm_dust3r.viz import SceneViz, segment_sky, auto_cam_size
+from lsm_dust3r.optim_factory import adjust_learning_rate_by_lr
 
-from dust3r.cloud_opt.commons import (edge_str, ALL_DISTS, NoGradParamDict, get_imshapes, signed_expm1, signed_log1p,
+from lsm_dust3r.cloud_opt.commons import (edge_str, ALL_DISTS, NoGradParamDict, get_imshapes, signed_expm1, signed_log1p,
                                       cosine_schedule, linear_schedule, get_conf_trf)
-import dust3r.cloud_opt.init_im_poses as init_fun
+import lsm_dust3r.cloud_opt.init_im_poses as init_fun
 
 
 class BasePCOptimizer (nn.Module):

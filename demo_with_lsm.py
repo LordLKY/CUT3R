@@ -15,11 +15,6 @@ from copy import deepcopy
 from add_ckpt_path import add_path_to_dust3r
 import imageio.v2 as iio
 
-from large_spatial_model.utils.path_manager import init_all_submodules
-init_all_submodules()
-
-from large_spatial_model.model import LSM_Dust3R
-
 # Set random seed for reproducibility.
 random.seed(42)
 
@@ -33,7 +28,7 @@ def parse_args():
         "--model_path",
         type=str,
         default="src/cut3r_512_dpt_4_64.pth",
-        help="Path to the pretrained model checkpoint.",
+        help="Path to the pretrained cut3r model checkpoint.",
     )
     parser.add_argument(
         "--seq_path",
@@ -66,10 +61,16 @@ def parse_args():
         help="value for tempfile.tempdir",
     )
     parser.add_argument(
-        "--save_ply",
+        "--save_cut3r_results",
         type=int,
         default=0,
-        help="Whether to save the ply file or not",
+        help="Whether to save the results of cut3r",
+    )
+    parser.add_argument(
+        "--lsm_model_path",
+        type=str,
+        default="checkpoints/pretrained_models/checkpoint-final.pth",
+        help="Path to the pretrained lsm model checkpoint.",
     )
 
     return parser.parse_args()
@@ -182,7 +183,7 @@ def prepare_input(
     return views
 
 
-def prepare_output(outputs, outdir, revisit=1, use_pose=True):
+def prepare_output(outputs, outdir, revisit=1, use_pose=True, save_cut3r_results=False):
     """
     Process inference outputs to generate point clouds and camera parameters for visualization.
 
@@ -260,32 +261,33 @@ def prepare_output(outputs, outdir, revisit=1, use_pose=True):
     intrinsics_tosave[:, 0, 2] = pp[:, 0]
     intrinsics_tosave[:, 1, 2] = pp[:, 1]
 
-    os.makedirs(os.path.join(outdir, "depth"), exist_ok=True)
-    os.makedirs(os.path.join(outdir, "conf"), exist_ok=True)
-    os.makedirs(os.path.join(outdir, "color"), exist_ok=True)
-    os.makedirs(os.path.join(outdir, "camera"), exist_ok=True)
-    for f_id in range(len(pts3ds_self)):
-        depth = depths_tosave[f_id].cpu().numpy()
-        conf = conf_self_tosave[f_id].cpu().numpy()
-        color = colors_tosave[f_id].cpu().numpy()
-        c2w = cam2world_tosave[f_id].cpu().numpy()
-        intrins = intrinsics_tosave[f_id].cpu().numpy()
-        np.save(os.path.join(outdir, "depth", f"{f_id:06d}.npy"), depth)
-        np.save(os.path.join(outdir, "conf", f"{f_id:06d}.npy"), conf)
-        iio.imwrite(
-            os.path.join(outdir, "color", f"{f_id:06d}.png"),
-            (color * 255).astype(np.uint8),
-        )
-        np.savez(
-            os.path.join(outdir, "camera", f"{f_id:06d}.npz"),
-            pose=c2w,
-            intrinsics=intrins,
-        )
+    if save_cut3r_results:
+        os.makedirs(os.path.join(outdir, "depth"), exist_ok=True)
+        os.makedirs(os.path.join(outdir, "conf"), exist_ok=True)
+        os.makedirs(os.path.join(outdir, "color"), exist_ok=True)
+        os.makedirs(os.path.join(outdir, "camera"), exist_ok=True)
+        for f_id in range(len(pts3ds_self)):
+            depth = depths_tosave[f_id].cpu().numpy()
+            conf = conf_self_tosave[f_id].cpu().numpy()
+            color = colors_tosave[f_id].cpu().numpy()
+            c2w = cam2world_tosave[f_id].cpu().numpy()
+            intrins = intrinsics_tosave[f_id].cpu().numpy()
+            np.save(os.path.join(outdir, "depth", f"{f_id:06d}.npy"), depth)
+            np.save(os.path.join(outdir, "conf", f"{f_id:06d}.npy"), conf)
+            iio.imwrite(
+                os.path.join(outdir, "color", f"{f_id:06d}.png"),
+                (color * 255).astype(np.uint8),
+            )
+            np.savez(
+                os.path.join(outdir, "camera", f"{f_id:06d}.npz"),
+                pose=c2w,
+                intrinsics=intrins,
+            )
     
     views = [view for view in outputs["views"]]
-    pts = [output["pts3d_in_other_view"] for output in outputs["pred"]]
+    ptss = [pts.cuda() for pts in pts3ds_other]
 
-    return pts, views
+    return ptss, views
 
 
 def parse_seq_path(p):
@@ -351,7 +353,7 @@ def cut3r_inference(args):
     img_mask = [True] * len(img_paths)
 
     # Prepare input views.
-    print("Preparing input views...")
+    print("\nPreparing input views...")
     views = prepare_input(
         img_paths=img_paths,
         img_mask=img_mask,
@@ -363,39 +365,122 @@ def cut3r_inference(args):
         shutil.rmtree(tmpdirname)
 
     # Load and prepare the model.
-    print(f"Loading model from {args.model_path}...")
+    print(f"\nLoading CUT3R model from {args.model_path}...")
     model = ARCroco3DStereo.from_pretrained(args.model_path).to(device)
     model.eval()
 
     # Run inference.
-    print("Running inference...")
+    print("\nRunning CUT3R inference...")
     start_time = time.time()
     outputs, state_args = inference(views, model, device)
+    torch.cuda.synchronize()
     total_time = time.time() - start_time
     per_frame_time = total_time / len(views)
     print(
-        f"CUT3R inference completed in {total_time:.2f} seconds (average {per_frame_time:.2f} s per frame)."
+        f"\nCUT3R inference completed in {total_time:.2f} seconds (average {per_frame_time:.2f} s per frame)."
     )
 
     # Process outputs for visualization.
-    print("Preparing output to save and for LSM...")
-    pts, out_views = prepare_output(
-        outputs, args.output_dir, 1, True
-    )
+    print("\nPreparing output to save and for LSM...")
+    ptss, out_views = prepare_output(
+        outputs, args.output_dir, 1, True, save_cut3r_results=(args.save_cut3r_results != 0)
+    )  # ptss: [(1, H, W, 3), ...], out_views['img']: [(1, 3, H, W), ...]
 
     torch.cuda.empty_cache()
     
-    return pts, out_views
+    return ptss, out_views
 
 
-def lsm_inference(pts, views, model_path="checkpoints/pretrained_models/checkpoint-final.pth"):
-    model = LSM_Dust3R.from_pretrained(model_path)
+# postprocess with LSM
+def prepare_lsm_output(outdir, lsm_outputs):
+    lsm_xyz = [output['xyz'].cpu() for output in lsm_outputs]
+    lsm_rotations = [output['rotations'].cpu() for output in lsm_outputs]
+    lsm_scales = [output['scales'].cpu() for output in lsm_outputs]
+    lsm_opacities = [output['opacities'].cpu() for output in lsm_outputs]
+    lsm_sh_coeffs = [output['sh_coeffs'].cpu() for output in lsm_outputs]
+
+    xyz = torch.cat(lsm_xyz).numpy()
+    rotation = torch.cat(lsm_rotations).numpy()
+    scale = torch.cat(lsm_scales).numpy()
+    opacities = torch.cat(lsm_opacities).numpy()
+    gs_sh_coeffs = torch.cat(lsm_sh_coeffs).transpose(1, 2)
+    f_dc = gs_sh_coeffs[:, :, 0:1].flatten(start_dim=1).contiguous().numpy()
+    f_rest = gs_sh_coeffs[:, :, 1:].flatten(start_dim=1).contiguous().numpy()
+
+    ply_path = os.path.join(outdir, "lsm_points3D.ply")
+
+    # build ply format
+    l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
+    # All channels except the 3 DC
+    for i in range(f_dc.shape[1]):
+        l.append('f_dc_{}'.format(i))
+    for i in range(f_rest.shape[1]):
+        l.append('f_rest_{}'.format(i))
+    l.append('opacity')
+    for i in range(scale.shape[1]):
+        l.append('scale_{}'.format(i))
+    for i in range(rotation.shape[1]):
+        l.append('rot_{}'.format(i))
+    
+    # save ply
+    from plyfile import PlyData, PlyElement
+    def save_ply(path):
+        normals = np.zeros_like(xyz)
+        dtype_full = [(attribute, 'f4') for attribute in l]
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
+    save_ply(ply_path)
+
+def lsm_inference(ptss, views, args):
+    from large_spatial_model.utils.path_manager import init_all_submodules
+    init_all_submodules()
+
+    from large_spatial_model.model import LSM_Dust3R
+    from large_spatial_model.utils.points_process import merge_points_one_view
+
+    print(f"\nLoading LSM model from {args.lsm_model_path}...")
+    model :LSM_Dust3R = LSM_Dust3R.from_pretrained(args.lsm_model_path)
     model.eval()
 
-    # TODO: Add LSM inference code here.
+    final_outputs = []
+
+    print("\nRunning LSM inference...")
+    start_time = time.time()
+    for pts, view in zip(ptss, views):
+        with torch.no_grad():
+            view['img'] = view['img'].cuda()
+            dust3r_feature, _, _ = model.dust3r.dust3r._encode_image(view['img'], view['true_shape'])
+            # LSeg forward pass
+            lseg_token_feature, lseg_res_feature = model.extract_lseg_features_one_view(view)
+            multi_scale_feature = lseg_token_feature.clone()
+            # merge points from one view
+            data_dict = merge_points_one_view(pts, view)
+            # PointTransformerV3 forward pass
+            point_transformer_output = model.point_transformer(data_dict, dust3r_feature, lseg_token_feature, multi_scale_feature)
+            # Gaussian head forward pass
+            final_output = model.gaussian_head.one_view_to_ply(point_transformer_output, lseg_res_feature)
+            final_output['xyz'] = pts.reshape(-1, 3)
+            # save memory on GPU
+            final_output_cpu = {key: value.cpu() for key, value in final_output.items()}
+            del final_output
+            torch.cuda.empty_cache()
+            final_outputs.append(final_output_cpu)
+    torch.cuda.synchronize()
+    total_time = time.time() - start_time
+    per_frame_time = total_time / len(views)
+    print(
+        f"\nLSM inference completed in {total_time:.2f} seconds (average {per_frame_time:.2f} s per frame)."
+    )
+    
+    print("\nPreparing output of LSM...")
+    prepare_lsm_output(args.output_dir, final_outputs)
 
 
 def main():
+    import sys
     args = parse_args()
     if not args.seq_path:
         print(
@@ -403,10 +488,13 @@ def main():
         )
         return
     else:
-        pts, views = cut3r_inference(args)
-        assert len(pts) == len(views), "FRAME_NUM of points and views should be the same"
-        lsm_inference(pts, views)
+        ptss, views = cut3r_inference(args)
+        assert len(ptss) == len(views), "FRAME_NUM of points and views should be the same"
+        lsm_inference(ptss, views, args)
 
 
 if __name__ == "__main__":
     main()
+
+# How to run the demo_with_lsm:
+# python demo_with_lsm.py --size 512 --seq_path examples/003 --output_dir output/demo_003

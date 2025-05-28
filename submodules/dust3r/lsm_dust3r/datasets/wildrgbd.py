@@ -41,7 +41,7 @@ class WildRGBD(Co3d):
 
 
 if __name__ == "__main__":
-    from dust3r.datasets.base.base_stereo_view_dataset import view_name
+    from lsm_dust3r.datasets.base.base_stereo_view_dataset import view_name
     from dust3r.viz import SceneViz, auto_cam_size
     from dust3r.utils.image import rgb
 

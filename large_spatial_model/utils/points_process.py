@@ -37,3 +37,40 @@ def merge_points(dust3r_output, view1, view2, grid_size=0.01):
     }
 
     return data_dict
+
+# merge points from one view
+def merge_points_one_view(pts, view, grid_size=0.01):
+    points = pts.detach()
+    shape = points.shape
+    # add color information
+    colors = rearrange(view['img'], 'b c h w -> b (h w) c') # B, 1 * H * W, 3
+    # merge points
+    points = rearrange(points, 'b h w c -> b (h w) c') # B, 1 * H * W, 3
+    B, N, _ = points.shape
+    offset = torch.arange(1, B + 1, device=points.device) * N
+    # Center and normalize points
+    center = torch.mean(points, dim=1, keepdim=True)  # compute centroid
+    points = points - center  # center the points
+    # Normalize points using coordinate range
+    max_coords = torch.max(torch.abs(points), dim=1, keepdim=True)[0]  # find max absolute value for each dimension
+    scale = torch.max(max_coords, dim=2, keepdim=True)[0]  # get the overall scale factor
+    points = points / scale  # normalize points to fit in a unit cube
+    # concat points and colors
+    feat = torch.cat([points, colors], dim=-1) # B, 1 * H * W, 6
+
+    data_dict = {
+        'coord': rearrange(points, 'b n c -> (b n) c'),
+        'color': rearrange(colors, 'b n c -> (b n) c'),
+        'feat': rearrange(feat, 'b n c -> (b n) c'),
+        'offset': offset,
+        'grid_size': grid_size,
+        'center': center,
+        'scale': scale,
+        'shape': shape,
+    }
+
+    for key in data_dict:
+        if key != 'shape' and key != 'grid_size':
+            data_dict[key] = data_dict[key].contiguous()
+
+    return data_dict

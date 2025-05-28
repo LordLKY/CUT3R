@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from submodules.dust3r.dust3r.model import AsymmetricCroCo3DStereo
+from submodules.dust3r.lsm_dust3r.model import AsymmetricCroCo3DStereo
 
 class Dust3RWithFeature(nn.Module):
     def __init__(self, **kwargs):

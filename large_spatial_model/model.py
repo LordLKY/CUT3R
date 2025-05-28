@@ -71,6 +71,18 @@ class LSM_Dust3R(nn.Module):
         # feature reduction
         lseg_res_feature = self.feature_reduction(lseg_features)
         return lseg_token_feature, lseg_res_feature
+    
+    # extract lseg feat for one view
+    def extract_lseg_features_one_view(self, view):
+        # extract features
+        lseg_features = self.lseg_feature_extractor.extract_features(view['img']) # (b, 512, h//2, w//2)
+        # average pooling
+        lseg_token_feature = self.tokenizer(lseg_features)
+        # reshape to (b, 2v, d)
+        lseg_token_feature = rearrange(lseg_token_feature, 'b c h w -> b (h w) c')
+        # feature reduction
+        lseg_res_feature = self.feature_reduction(lseg_features)
+        return lseg_token_feature, lseg_res_feature
 
     @classmethod
     def from_pretrained(cls, checkpoint_path: str, use_pretrained_lseg: bool = True, use_pretrained_dust3r: bool = True, device: str = 'cuda'):

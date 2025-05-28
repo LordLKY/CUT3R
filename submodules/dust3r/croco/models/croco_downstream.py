@@ -7,7 +7,7 @@
 
 import torch
 
-from .croco import CroCoNet
+from .lsm_croco import CroCoNet
 
 
 def croco_args_from_ckpt(ckpt):

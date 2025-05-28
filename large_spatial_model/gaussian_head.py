@@ -129,3 +129,75 @@ class GaussianHead(nn.Module):
         pred2['gs_feats'] = gs_feats[1]
         
         return pred1, pred2
+    
+    def one_view_to_ply(self, point_transformer_output, lseg_res_feature):
+        pred = {}
+
+        scene_scale = point_transformer_output['scale'] # B, 1, 1
+        scene_center = point_transformer_output['center'] # B, 1, 3
+        B, H, W, _ = point_transformer_output['shape']
+        normalized_means = point_transformer_output['coord'] # B * 1 * H * W, 3
+        colors = point_transformer_output['color'] # B * V * H * W, 3
+
+        # split normalized_means to the view
+        normalized_means = rearrange(normalized_means, '(b v h w) c -> v b (h w) c', v=1, b=B, h=H, w=W)
+        means = normalized_means * scene_scale + scene_center # V, B, H * W, 3
+        means = rearrange(means, 'v b (h w) c -> b (v h w) c', b=B, v=1, h=H, w=W)
+
+        # get features
+        feat = point_transformer_output['feat']
+        gaussian_attr = self.gaussian_proj(feat)
+        scales, rotations, opacities, sh_coeffs, gs_feats = torch.split(gaussian_attr, 
+                                                                      [
+                                                                          self.d_scales, 
+                                                                          self.d_rotations, 
+                                                                          self.d_opacities, 
+                                                                          self.d_view_dep_features * self.d_sh,
+                                                                          self.args['d_gs_feats']
+                                                                      ], 
+                                                                      dim=-1)
+
+        # scales
+        # calculate the distance between each point and its nearest neighbor
+        all_dist = torch.stack([torch.sqrt(torch.clamp_min(distCUDA2(pts3d), 0.0000001)) for pts3d in means]) # B, V * H * W
+        median_dist = all_dist.median(dim=-1)[0][:, None, None] # B, 1, 1
+        scales = self.scale_activation(scales)
+        scales = rearrange(scales, '(b h w) c -> b (h w) c', b=B, h=H, w=W)
+        scales = scales * all_dist[..., None]
+        # clip scales
+        scales = torch.clamp(scales, min=0.1 * median_dist, max=3.0 * median_dist)
+        scales = rearrange(scales, 'b (h w) c -> (b h w) c', b=B, h=H, w=W)
+        
+        # scales-deactivation
+        scales = torch.log(scales)
+        
+        # no need to build covariance matrix
+        # covs = build_covariance(scales, rotations)
+        
+        # sh_mask
+        sh_coeffs = rearrange(sh_coeffs, '(b h w) (c d) -> (b h w) c d', b=B, h=H, w=W, c=self.d_sh, d=self.d_view_dep_features)
+        sh_dc = sh_coeffs[..., 0, :]
+        sh_rest = sh_coeffs[..., 1:, :]
+        if self.args.get('rgb_residual'):
+            # denormalize colors
+            colors = colors * 0.5 + 0.5
+            sh_rgb = RGB2SH(colors) # (B * V * H * W, 3)
+            # add rgb residual to dc component
+            sh_dc = sh_dc + sh_rgb
+            # concatenate dc and rest
+            sh_coeffs = torch.cat([sh_dc[..., None, :], sh_rest], dim=-2)
+        sh_coeffs = sh_coeffs * self.sh_mask[None, :, None]
+
+        # lseg_features(learning residual)
+        lseg_res_feature = rearrange(lseg_res_feature, 'b c h w -> (b h w) c', b=B, h=H, w=W)
+        gs_feats = gs_feats + lseg_res_feature
+
+        pred['scales'] = scales
+        pred['rotations'] = rotations
+        # pred['covs'] = None
+        pred['opacities'] = opacities
+        pred['sh_coeffs'] = sh_coeffs
+        pred['means'] = means
+        pred['gs_feats'] = gs_feats
+        
+        return pred

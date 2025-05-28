@@ -8,10 +8,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from dust3r.cloud_opt.base_opt import BasePCOptimizer
-from dust3r.utils.geometry import geotrf
-from dust3r.utils.device import to_cpu, to_numpy
-from dust3r.utils.geometry import depthmap_to_pts3d
+from lsm_dust3r.cloud_opt.base_opt import BasePCOptimizer
+from lsm_dust3r.utils.geometry import geotrf
+from lsm_dust3r.utils.device import to_cpu, to_numpy
+from lsm_dust3r.utils.geometry import depthmap_to_pts3d
 
 
 class ModularPointCloudOptimizer (BasePCOptimizer):
