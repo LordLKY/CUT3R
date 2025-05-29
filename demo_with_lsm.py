@@ -369,10 +369,13 @@ def cut3r_inference(args):
     model = ARCroco3DStereo.from_pretrained(args.model_path).to(device)
     model.eval()
 
+    print(f"\nCUT3R need {torch.cuda.memory_allocated() / 1024**2:.2f} mb GPU memory")
+
     # Run inference.
     print("\nRunning CUT3R inference...")
     start_time = time.time()
-    outputs, state_args = inference(views, model, device)
+    with torch.no_grad():
+        outputs, state_args = inference(views, model, device)
     torch.cuda.synchronize()
     total_time = time.time() - start_time
     per_frame_time = total_time / len(views)
@@ -386,7 +389,10 @@ def cut3r_inference(args):
         outputs, args.output_dir, 1, True, save_cut3r_results=(args.save_cut3r_results != 0)
     )  # ptss: [(1, H, W, 3), ...], out_views['img']: [(1, 3, H, W), ...]
 
+    del model
     torch.cuda.empty_cache()
+
+    print(f"\nAfter CUT3R, torch still holds {torch.cuda.memory_allocated() / 1024**2:.2f} mb GPU memory")
     
     return ptss, out_views
 
@@ -445,6 +451,8 @@ def lsm_inference(ptss, views, args):
     model :LSM_Dust3R = LSM_Dust3R.from_pretrained(args.lsm_model_path)
     model.eval()
 
+    print(f"\nLSM need {torch.cuda.memory_allocated() / 1024**2:.2f} mb GPU memory")
+
     final_outputs = []
 
     print("\nRunning LSM inference...")
@@ -463,11 +471,11 @@ def lsm_inference(ptss, views, args):
             # Gaussian head forward pass
             final_output = model.gaussian_head.one_view_to_ply(point_transformer_output, lseg_res_feature)
             final_output['xyz'] = pts.reshape(-1, 3)
-            # save memory on GPU
-            final_output_cpu = {key: value.cpu() for key, value in final_output.items()}
-            del final_output
-            torch.cuda.empty_cache()
-            final_outputs.append(final_output_cpu)
+            # save memory on GPU if
+            # final_output_cpu = {key: value.cpu() for key, value in final_output.items()}
+            # del final_output
+            # torch.cuda.empty_cache()
+            final_outputs.append(final_output)
     torch.cuda.synchronize()
     total_time = time.time() - start_time
     per_frame_time = total_time / len(views)
@@ -480,7 +488,6 @@ def lsm_inference(ptss, views, args):
 
 
 def main():
-    import sys
     args = parse_args()
     if not args.seq_path:
         print(
