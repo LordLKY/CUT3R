@@ -806,7 +806,7 @@ class PointTransformerV3(PointModule):
         pre_norm=True,
         shuffle_orders=True,
         enable_rpe=False,
-        enable_flash=True,
+        enable_flash=False,  # flash_attn is not robust enough
         upcast_attention=False,
         upcast_softmax=False,
         cls_mode=False,

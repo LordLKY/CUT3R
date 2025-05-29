@@ -15,6 +15,8 @@ from copy import deepcopy
 from add_ckpt_path import add_path_to_dust3r
 import imageio.v2 as iio
 
+import gc
+
 # Set random seed for reproducibility.
 random.seed(42)
 
@@ -285,7 +287,7 @@ def prepare_output(outputs, outdir, revisit=1, use_pose=True, save_cut3r_results
             )
     
     views = [view for view in outputs["views"]]
-    ptss = [pts.cuda() for pts in pts3ds_other]
+    ptss = [pts for pts in pts3ds_other]
 
     return ptss, views
 
@@ -390,6 +392,7 @@ def cut3r_inference(args):
     )  # ptss: [(1, H, W, 3), ...], out_views['img']: [(1, 3, H, W), ...]
 
     del model
+    gc.collect()
     torch.cuda.empty_cache()
 
     print(f"\nAfter CUT3R, torch still holds {torch.cuda.memory_allocated() / 1024**2:.2f} mb GPU memory")
@@ -440,48 +443,119 @@ def prepare_lsm_output(outdir, lsm_outputs):
         PlyData([el]).write(path)
     save_ply(ply_path)
 
+def lsm_feature_inference(model, ptss, views):
+    from einops import rearrange
+    from large_spatial_model.utils.points_process import merge_points_one_view
+
+    dust3r_outputs = []
+    lseg_token_outputs = []
+    lseg_res_outputs = []
+    data_dicts = []
+
+    dust3r_model = model.dust3r.dust3r.to('cuda')
+    lseg_model = model.lseg_feature_extractor.to('cuda')
+    token_nn = model.tokenizer.to('cuda')
+    f_exp_nn = model.feature_expansion.to('cuda')
+    f_red_nn = model.feature_reduction.to('cuda')
+
+    for pts, view in zip(ptss, views):
+        with torch.no_grad():
+            pts = pts.cuda()
+            view['img'] = view['img'].cuda()
+            dust3r_feature, _, _ = dust3r_model._encode_image(view['img'], view['true_shape'])
+            dust3r_outputs.append(dust3r_feature.cpu())
+        # LSeg forward pass
+            # extract features
+            lseg_features = lseg_model.extract_features(view['img']) # (b, 512, h//2, w//2)
+            # average pooling
+            lseg_token_feature = token_nn(lseg_features.cpu())
+            # reshape to (b, 2v, d)
+            lseg_token_feature = rearrange(lseg_token_feature, 'b c h w -> b (h w) c')
+            # feature reduction
+            lseg_res_feature = f_red_nn(lseg_features)
+            lseg_token_outputs.append(lseg_token_feature.cpu())
+            lseg_res_outputs.append(lseg_res_feature.cpu())
+
+            data_dicts.append(merge_points_one_view(pts, view))
+    
+    del dust3r_model, lseg_model, token_nn, f_exp_nn, f_red_nn
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return dust3r_outputs, lseg_token_outputs, lseg_res_outputs, data_dicts
+
 def lsm_inference(ptss, views, args):
     from large_spatial_model.utils.path_manager import init_all_submodules
     init_all_submodules()
 
     from large_spatial_model.model import LSM_Dust3R
-    from large_spatial_model.utils.points_process import merge_points_one_view
+    # from large_spatial_model.utils.points_process import merge_points_one_view
+    # from einops import rearrange
 
     print(f"\nLoading LSM model from {args.lsm_model_path}...")
-    model :LSM_Dust3R = LSM_Dust3R.from_pretrained(args.lsm_model_path)
+    model :LSM_Dust3R = LSM_Dust3R.from_pretrained(args.lsm_model_path, device='cpu')
     model.eval()
 
     print(f"\nLSM need {torch.cuda.memory_allocated() / 1024**2:.2f} mb GPU memory")
 
     final_outputs = []
+    ptv3_outputs = []
 
     print("\nRunning LSM inference...")
-    start_time = time.time()
-    for pts, view in zip(ptss, views):
+
+# NOTE: flash_attn on windows is not robust😢
+#       but without flash_attn, pt3v will cause CUDA OOM🤡
+
+# 1. run dust3r and lseg inference
+    dust3r_outputs, lseg_token_outputs, lseg_res_outputs, data_dicts = lsm_feature_inference(model, ptss, views)
+    
+# 2. run ptv3 inference
+    ptv3_model = model.point_transformer.to('cuda')
+    for i in range(len(data_dicts)):
         with torch.no_grad():
-            view['img'] = view['img'].cuda()
-            dust3r_feature, _, _ = model.dust3r.dust3r._encode_image(view['img'], view['true_shape'])
-            # LSeg forward pass
-            lseg_token_feature, lseg_res_feature = model.extract_lseg_features_one_view(view)
+            lseg_token_feature = lseg_token_outputs[i].cuda()
             multi_scale_feature = lseg_token_feature.clone()
-            # merge points from one view
-            data_dict = merge_points_one_view(pts, view)
-            # PointTransformerV3 forward pass
-            point_transformer_output = model.point_transformer(data_dict, dust3r_feature, lseg_token_feature, multi_scale_feature)
-            # Gaussian head forward pass
-            final_output = model.gaussian_head.one_view_to_ply(point_transformer_output, lseg_res_feature)
-            final_output['xyz'] = pts.reshape(-1, 3)
-            # save memory on GPU if
-            # final_output_cpu = {key: value.cpu() for key, value in final_output.items()}
-            # del final_output
-            # torch.cuda.empty_cache()
+            point_transformer_output = model.point_transformer(data_dicts[i], dust3r_outputs[i].cuda(), lseg_token_feature, multi_scale_feature)
+            ptv3_outputs.append(point_transformer_output)
+    del ptv3_model, dust3r_outputs, lseg_token_outputs, data_dicts
+    gc.collect()
+    torch.cuda.empty_cache()
+
+# 3. run gaussian head inference
+    gh_model = model.gaussian_head.to('cuda')
+    for i in range(len(ptv3_outputs)):
+        with torch.no_grad():
+            final_output = gh_model.one_view_to_ply(ptv3_outputs[i], lseg_res_outputs[i].cuda())
+            final_output['xyz'] = ptss[i].reshape(-1, 3)
             final_outputs.append(final_output)
-    torch.cuda.synchronize()
-    total_time = time.time() - start_time
-    per_frame_time = total_time / len(views)
-    print(
-        f"\nLSM inference completed in {total_time:.2f} seconds (average {per_frame_time:.2f} s per frame)."
-    )
+    del gh_model, ptv3_outputs, lseg_res_outputs
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+# NOTE: When GPU memory is enough, ideal code is as follows:🙃
+    # for pts, view in zip(ptss, views):
+    #     with torch.no_grad():
+    #         pts = pts.cuda()
+    #         view['img'] = view['img'].cuda()
+    #         dust3r_feature, _, _ = model.dust3r.dust3r._encode_image(view['img'], view['true_shape'])
+    #         # LSeg forward pass
+    #         lseg_token_feature, lseg_res_feature = model.extract_lseg_features_one_view(view)
+    #         multi_scale_feature = lseg_token_feature.clone()
+
+    #         # merge points from one view
+    #         data_dict = merge_points_one_view(pts, view)
+    #         # PointTransformerV3 forward pass
+    #         point_transformer_output = model.point_transformer(data_dict, dust3r_feature, lseg_token_feature, multi_scale_feature)
+
+    #         # Gaussian head forward pass
+    #         final_output = model.gaussian_head.one_view_to_ply(point_transformer_output, lseg_res_feature)
+    #         final_output['xyz'] = pts.reshape(-1, 3)
+
+    #         # save memory on GPU
+    #         final_output_cpu = {key: value.cpu() for key, value in final_output.items()}
+    #         del final_output, pts, view
+    #         torch.cuda.empty_cache()
+    #         final_outputs.append(final_output_cpu)
     
     print("\nPreparing output of LSM...")
     prepare_lsm_output(args.output_dir, final_outputs)
@@ -505,3 +579,8 @@ if __name__ == "__main__":
 
 # How to run the demo_with_lsm:
 # python demo_with_lsm.py --size 512 --seq_path examples/003 --output_dir output/demo_003
+    
+# use gs
+# python gs/train.py --eval --iterations 200 -s output/demo_003 --use_lsm 1
+# python gs/render.py -m output/demo_003/lsm_model --iteration 200
+# python gs/metrics.py -m output/demo_003/lsm_model
