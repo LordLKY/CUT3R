@@ -47,7 +47,7 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree, optimizer_type="default"):
+    def __init__(self, sh_degree, optimizer_type="default", sample_ratio=1.0):
         self.active_sh_degree = 0
         self.optimizer_type = optimizer_type
         self.max_sh_degree = sh_degree  
@@ -64,6 +64,8 @@ class GaussianModel:
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.setup_functions()
+
+        self.sample_ratio = sample_ratio
 
     def capture(self):
         return (
@@ -174,6 +176,8 @@ class GaussianModel:
         self.pretrained_exposures = None
         exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
+
+        self.sample_points(self.sample_ratio)
     
     def create_from_lsm_ply(self, cam_infos : int, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
@@ -182,6 +186,8 @@ class GaussianModel:
         self.pretrained_exposures = None
         exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
+
+        self.sample_points(self.sample_ratio)
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -370,6 +376,22 @@ class GaussianModel:
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
         self.tmp_radii = self.tmp_radii[valid_points_mask]
+    
+    def sample_points(self, ratio=1.0):
+        if ratio >= 1.0 or ratio < 0.0:
+            return
+        num_points = self.get_xyz.shape[0]
+        num_samples = int(num_points * ratio)
+        indices = torch.randperm(num_points)[:num_samples]
+
+        self._xyz = nn.Parameter(self._xyz[indices].detach_())
+        self._features_dc = nn.Parameter(self._features_dc[indices].detach_())
+        self._features_rest = nn.Parameter(self._features_rest[indices].detach_())
+        self._opacity = nn.Parameter(self._opacity[indices].detach_())
+        self._scaling = nn.Parameter(self._scaling[indices].detach_())
+        self._rotation = nn.Parameter(self._rotation[indices].detach_())
+
+        self.max_radii2D = self.max_radii2D[indices]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}

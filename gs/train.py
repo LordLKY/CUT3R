@@ -12,7 +12,7 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss, ssim, psnr_loss
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -40,14 +40,15 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, use_lsm):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from,
+             use_lsm, record_loss, save_ply, sample_ratio):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
+    gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, sample_ratio=sample_ratio)
     scene = Scene(dataset, gaussians, use_lsm=use_lsm)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -67,6 +68,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
+
+    # to record loss in training
+    loss_records = None
+    if record_loss is not None:
+        loss_records = {viewpoint_cam.image_name: [] for viewpoint_cam in viewpoint_stack}
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -126,6 +132,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
+        # record loss
+        if record_loss is not None:
+            if record_loss == 'L1':
+                loss_records[viewpoint_cam.image_name].append(Ll1.item())
+            elif record_loss == 'SSIM':
+                loss_records[viewpoint_cam.image_name].append(ssim_value.item())
+            elif record_loss == 'PSNR':
+                loss_records[viewpoint_cam.image_name].append(psnr_loss(image, gt_image).item())
+            elif record_loss == 'ALL':
+                loss_records[viewpoint_cam.image_name].append((Ll1.item(), ssim_value.item(), psnr_loss(image, gt_image).item()))
+
         # Depth regularization
         Ll1depth_pure = 0.0
         if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable:
@@ -157,7 +174,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
-            if (iteration in saving_iterations):
+            if save_ply and (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
@@ -186,9 +203,38 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.optimizer.step()
                     gaussians.optimizer.zero_grad(set_to_none = True)
 
-            if (iteration in checkpoint_iterations):
+            if save_ply and (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+    
+    if record_loss is not None:
+        visualize_record_loss(record_loss, loss_records)
+
+def visualize_record_loss(record_loss, loss_records):
+    import matplotlib.pyplot as plt
+    if record_loss != 'ALL':
+        for key, values in loss_records.items():
+            plt.plot(values, label=key)
+        plt.legend()
+        plt.title(f"{record_loss} LOSS in Training")
+        plt.xlabel("iteration")
+        plt.ylabel("loss")
+        plt.grid(True)
+        plt.show()
+    elif record_loss == 'ALL':
+        fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+        for i in range(3):
+            ax = axes[i]
+            for key, triplets in loss_records.items():
+                values = [t[i] for t in triplets]
+                ax.plot(values, label=key)
+            ax.set_ylabel(f"loss")
+            ax.legend()
+            ax.grid(True)
+        axes[2].set_xlabel("iteration")
+        plt.suptitle("L1/SSIM/PSNR LOSS in Training")
+        plt.tight_layout()
+        plt.show()
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -269,6 +315,9 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--use_lsm", type=int, default=0)
+    parser.add_argument("--record_loss", type=str, default=None)
+    parser.add_argument("--save_ply", type=int, default=0)
+    parser.add_argument("--sample_ratio", type=float, default=1.0)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -280,6 +329,9 @@ if __name__ == "__main__":
             os.makedirs(os.path.join(args.source_path, "model"), exist_ok=True)
             args.model_path = os.path.join(args.source_path, "model")
     
+    if args.record_loss is not None:
+        assert args.record_loss in ['L1', 'PSNR', 'SSIM', 'ALL'], "Invalid loss type to record"
+    
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
@@ -289,7 +341,8 @@ if __name__ == "__main__":
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, (args.use_lsm != 0))
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from,
+             (args.use_lsm != 0), args.record_loss, (args.save_ply != 0), args.sample_ratio)
 
     # All done
     print("\nTraining complete.")

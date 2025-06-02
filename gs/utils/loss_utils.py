@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 from math import exp
+from utils.image_utils import psnr
 try:
     from diff_gaussian_rasterization._C import fusedssim, fusedssim_backward
 except:
@@ -89,3 +90,7 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
 def fast_ssim(img1, img2):
     ssim_map = FusedSSIMMap.apply(C1, C2, img1, img2)
     return ssim_map.mean()
+
+
+def psnr_loss(img1, img2):
+    return psnr(img1, img2).mean()
