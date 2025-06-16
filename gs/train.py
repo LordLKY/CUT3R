@@ -41,7 +41,7 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from,
-             use_lsm, record_loss, save_ply, sample_ratio):
+             use_lsm, record_loss, save_ply, sample_ratio, lr_scale):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
@@ -50,7 +50,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type, sample_ratio=sample_ratio)
     scene = Scene(dataset, gaussians, use_lsm=use_lsm)
-    gaussians.training_setup(opt)
+    gaussians.training_setup(opt, lr_scale=lr_scale)
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -208,7 +208,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
     
     if record_loss is not None:
-        visualize_record_loss(record_loss, loss_records)
+        # visualize_record_loss(record_loss, loss_records)
+        save_record_loss(record_loss, loss_records, scene.model_path)
 
 def visualize_record_loss(record_loss, loss_records):
     import matplotlib.pyplot as plt
@@ -222,7 +223,7 @@ def visualize_record_loss(record_loss, loss_records):
         plt.grid(True)
         plt.show()
     elif record_loss == 'ALL':
-        fig, axes = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
+        fig, axes = plt.subplots(3, 1, figsize=(8, 9), sharex=True)
         for i in range(3):
             ax = axes[i]
             for key, triplets in loss_records.items():
@@ -235,6 +236,20 @@ def visualize_record_loss(record_loss, loss_records):
         plt.suptitle("L1/SSIM/PSNR LOSS in Training")
         plt.tight_layout()
         plt.show()
+
+def save_record_loss(record_loss, loss_records, save_pth):
+    import numpy as np
+    if record_loss != 'ALL' or save_pth is None:
+        return
+    loss_npz = {}
+    loss_type = ['L1', 'SSIM', 'PSNR']
+    for i in range(3):
+        loss_list = []
+        for key, triplets in loss_records.items():
+            values = [t[i] for t in triplets]
+            loss_list.append(values)
+        loss_npz[loss_type[i]] = np.array(loss_list)
+    np.savez(os.path.join(save_pth, "loss_records.npz"), **loss_npz)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -318,6 +333,7 @@ if __name__ == "__main__":
     parser.add_argument("--record_loss", type=str, default=None)
     parser.add_argument("--save_ply", type=int, default=0)
     parser.add_argument("--sample_ratio", type=float, default=1.0)
+    parser.add_argument("--lr_scale", type=float, default=1.0)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -342,7 +358,7 @@ if __name__ == "__main__":
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from,
-             (args.use_lsm != 0), args.record_loss, (args.save_ply != 0), args.sample_ratio)
+             (args.use_lsm != 0), args.record_loss, (args.save_ply != 0), args.sample_ratio, args.lr_scale)
 
     # All done
     print("\nTraining complete.")

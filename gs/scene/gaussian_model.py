@@ -189,18 +189,18 @@ class GaussianModel:
 
         self.sample_points(self.sample_ratio)
 
-    def training_setup(self, training_args):
+    def training_setup(self, training_args, lr_scale=1.0):
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
         l = [
-            {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
-            {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
-            {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
-            {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
-            {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
-            {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
+            {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale * lr_scale, "name": "xyz"},
+            {'params': [self._features_dc], 'lr': training_args.feature_lr * lr_scale, "name": "f_dc"},
+            {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0 * lr_scale, "name": "f_rest"},
+            {'params': [self._opacity], 'lr': training_args.opacity_lr * lr_scale, "name": "opacity"},
+            {'params': [self._scaling], 'lr': training_args.scaling_lr * lr_scale, "name": "scaling"},
+            {'params': [self._rotation], 'lr': training_args.rotation_lr * lr_scale, "name": "rotation"}
         ]
 
         if self.optimizer_type == "default":
