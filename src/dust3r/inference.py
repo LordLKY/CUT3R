@@ -239,6 +239,26 @@ def inference(groups, model, device, verbose=True):
 
 
 @torch.no_grad()
+def inference_online(groups, model, device, verbose=True, init_iter=False):
+    ignore_keys = set(
+        ["depthmap", "dataset", "label", "instance", "idx", "true_shape", "rng"]
+    )
+    for view in groups:  # only one view in groups
+        for name in view.keys():  # pseudo_focal
+            if name in ignore_keys:
+                continue
+            if isinstance(view[name], tuple) or isinstance(view[name], list):
+                view[name] = [x.to(device, non_blocking=True) for x in view[name]]
+            else:
+                view[name] = view[name].to(device, non_blocking=True)
+
+    if verbose:
+        print(f">> strat an online inference iteration...")
+
+    return to_cpu(model.forward_online(groups, init_iter))
+
+
+@torch.no_grad()
 def inference_step(view, state_args, model, device, verbose=True):
     ignore_keys = set(
         ["depthmap", "dataset", "label", "instance", "idx", "true_shape", "rng"]

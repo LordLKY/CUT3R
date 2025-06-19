@@ -912,6 +912,75 @@ class ARCroco3DStereo(CroCoNet):
         else:
             ress, views = self._forward_impl(views, ret_state=ret_state)
             return ARCroco3DStereoOutput(ress=ress, views=views)
+    
+    def forward_online(self, view, init_iter=False):
+        # view is a list with one element
+        shape, feat_ls, pos = self._encode_views(view)
+        feat = feat_ls[-1]
+        if init_iter:  # mem for online inference
+            self.online_state_feat, self.online_state_pos = self._init_state(feat[0], pos[0])
+            self.online_mem = self.pose_retriever.mem.expand(feat[0].shape[0], -1, -1)
+            self.init_state_feat = self.online_state_feat.clone()
+            self.init_mem = self.online_mem.clone()
+        if self.pose_head_flag:
+            global_img_feat = self._get_img_level_feat(feat[0])
+            if init_iter:
+                pose_feat = self.pose_token.expand(feat[0].shape[0], -1, -1)
+            else:
+                pose_feat = self.pose_retriever.inquire(global_img_feat, self.online_mem)
+            pose_pos = -torch.ones(
+                feat[0].shape[0], 1, 2, device=feat[0].device, dtype=pos[0].dtype
+            )
+        else:
+            pose_feat = None
+            pose_pos = None
+        new_state_feat, dec = self._recurrent_rollout(
+            self.online_state_feat,
+            self.online_state_pos,
+            feat[0],
+            pos[0],
+            pose_feat,
+            pose_pos,
+            self.init_state_feat,
+            img_mask=view[0]["img_mask"],
+            reset_mask=view[0]["reset"],
+            update=view[0].get("update", None),
+        )
+        out_pose_feat = dec[-1][:, 0:1]
+        new_mem = self.pose_retriever.update_mem(
+            self.online_mem, global_img_feat, out_pose_feat
+        )
+        assert len(dec) == self.dec_depth + 1
+        head_input = [
+            dec[0].float(),
+            dec[self.dec_depth * 2 // 4][:, 1:].float(),
+            dec[self.dec_depth * 3 // 4][:, 1:].float(),
+            dec[self.dec_depth].float(),
+        ]
+        res = self._downstream_head(head_input, shape[0], pos=pos[0])
+        img_mask = view[0]["img_mask"]
+        update = view[0].get("update", None)
+        if update is not None:
+            update_mask = (
+                img_mask & update
+            )  # if don't update, then whatever img_mask
+        else:
+            update_mask = img_mask
+        update_mask = update_mask[:, None, None].float()
+        self.online_state_feat = new_state_feat * update_mask + self.online_state_feat * (
+            1 - update_mask
+        )  # update global state
+        self.online_mem = new_mem * update_mask + self.online_mem * (
+            1 - update_mask
+        )  # then update local state
+        reset_mask = view[0]["reset"]
+        if reset_mask is not None:
+            reset_mask = reset_mask[:, None, None].float()
+            self.online_state_feat = self.init_state_feat * reset_mask + self.online_state_feat * (
+                1 - reset_mask
+            )
+            self.online_mem = self.init_mem * reset_mask + self.online_mem * (1 - reset_mask)
+        return dict(pred=res, view=view[0])
 
     def inference_step(
         self, view, state_feat, state_pos, init_state_feat, mem, init_mem
